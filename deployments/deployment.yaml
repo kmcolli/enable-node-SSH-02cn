@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: enable-node-ssh-02cn
+  name: enable-node-ssh-02cn
+  namespace: zero-to-cloud-native
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: enable-node-ssh-02cn
+  template:
+    metadata:
+      labels:
+        app: enable-node-ssh-02cn
+    spec:
+      containers:
+      - env:
+        - name: FLASK_APP
+          value: 'enable-node-ssh-02cn.py'
+        - name: ENVIRONMENT
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: ENVIRONMENT
+        - name: SERVERNAME
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: SERVERNAME
+        - name: IAM_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: IAM_ENDPOINT
+        - name: LOGDNA_APIKEY
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: LOGDNA_APIKEY
+        - name: LOGDNA_LOGHOST
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: LOGDNA_LOGHOST
+        - name: RABBITMQ_HOST
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_HOST
+        - name: RABBITMQ_PORT
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_PORT
+        - name: RABBITMQ_USER
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_USER
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_PASSWORD
+        - name: RABBITMQ_QUEUE
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_QUEUE
+        - name: RABBITMQ_CERT_CRN
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: RABBITMQ_CERT_CRN  
+        - name: IBMCLOUD_APIKEY
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: IBMCLOUD_APIKEY
+        - name: CERT_MANAGER_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: zero-to-cloud-native-secrets
+              key: CERT_MANAGER_ENDPOINT
+        image:  us.icr.io/zero-to-cloud-native/enable-node-ssh-02cn:v38
+        imagePullPolicy: IfNotPresent
+        name: enable-node-ssh-02cn
+        ports:
+        - containerPort: 8087
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            cpu: .5
+            memory: 8Gi
+      dnsPolicy: ClusterFirst
+      imagePullSecrets:
+      - name: all-icr-io
+      restartPolicy: Always
+      schedulerName: default-scheduler
