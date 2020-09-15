@@ -6,7 +6,9 @@ from app.worker import *
 app.logger.info('Connecting to queue')
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 context.verify_mode = ssl.CERT_REQUIRED
-context.load_verify_locations('rabbit-crt.pem')
+context.verify_mode = ssl.CERT_REQUIRED
+cert = getRabbitCert("REALTIME", app.config["IBMCLOUD_APIKEY"])
+context.load_verify_locations(cadata=cert)
 conn_params = pika.ConnectionParameters(port=app.config['RABBITMQ_PORT'],
                                         host=app.config['RABBITMQ_HOST'],
                                         credentials=pika.PlainCredentials(app.config['RABBITMQ_USER'],

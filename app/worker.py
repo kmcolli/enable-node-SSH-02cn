@@ -14,28 +14,9 @@ def getClusterRegionandResoureGroupName(reqid, cluster_name):
     app.logger.debug("{} Will return region={} and resource group name={}".format(reqid, region, resourcegroupname ))
     return region, resourcegroupname 
 
-def getiamtoken(apikey):
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': 'Basic Yng6Yng=',
-    }
-    parms = {"grant_type": "urn:ibm:params:oauth:grant-type:apikey", "apikey": apikey}
-
-    try:
-        resp = requests.post(app.config['IAM_ENDPOINT'] + "/identity/token?" + urllib.parse.urlencode(parms), headers=headers, timeout=30)
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError as errc:
-        quit()
-    except requests.exceptions.Timeout as errt:
-        quit()
-    except requests.exceptions.HTTPError as errb:
-        quit()
-    iam = resp.json()
-    return iam 
-
 def getRabbitCert(reqid, apikey):
-    logger.debug("{} Starting to get RabbitMQ Certificate ")
-    iamToken = getiamtoken(apikey)
+    app.logger.debug("{} Starting to get RabbitMQ Certificate ")
+    iamToken = getiamtoken()
     certManagerEndpoint = app.config['CERT_MANAGER_ENDPOINT']
     header = {
         'accept': 'application/json',
@@ -43,14 +24,20 @@ def getRabbitCert(reqid, apikey):
     }
     rabbit_crn = app.config['RABBITMQ_CERT_CRN']
     url = certManagerEndpoint+'/api/v2/certificate/'+urllib.parse.quote_plus(rabbit_crn)
-    
     response = requests.get(url,headers=header)
     json_response = json.loads(response.text)
-    cert_file = open("rabbit-crt.pem", "wt")
-    n = cert_file.write(json_response['data']['content'])
-    cert_file.close()
     
-    return
+    return json_response['data']['content']
+
+def getiamtoken():
+    iamhost=os.environ.get("UTILITY_02CN_SERVICE_SERVICE_HOST")
+    iamport=os.environ.get("UTILITY_02CN_SERVICE_SERVICE_PORT")
+    iam_url="http://"+iamhost+":"+iamport+"/api/v1/getiamtoken/"
+    iam_data = { "apikey":  app.config["IBMCLOUD_APIKEY"]}
+    headers = { "Content-Type": "application/json" }
+    resp = requests.get(iam_url, data=json.dumps(iam_data), headers=headers)
+    iamtoken = resp.json()["iamtoken"]
+    return iamtoken 
 
 def enableSSHNode(reqid, apikey, cluster_name):
     app.logger.info("{} - Enabling SSH on Worker Nodes".format(reqid))
