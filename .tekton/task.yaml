@@ -25,6 +25,72 @@ spec:
   - name: task-pvc
     mountPath: /artifacts   
   steps:
+    - name: fetch-git-token
+      image: ibmcom/pipeline-base-image
+      env:
+        - name: REPOSITORY
+          value: $(params.repository)
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -e -o pipefail
+          TOOLCHAIN_ID=$(jq -r '.toolchain_guid' /cd-config/toolchain.json)
+          TOOLCHAIN_REGION=$(jq -r '.region_id' /cd-config/toolchain.json | awk -F: '{print $3}')
+          ##########################################################################
+          # Setting HOME explicitly to have ibmcloud plugins available
+          # doing the export rather than env definition is a workaround
+          # until https://github.com/tektoncd/pipeline/issues/1836 is fixed
+          export HOME="/root"
+          ##########################################################################
+          if [[ "$REPOSITORY" != *.git ]]; then
+            echo "Adding .git suffix to Repository URL"
+            REPOSITORY="${REPOSITORY}.git"
+          fi
+          GIT_SERVICE_INSTANCE_ID=$(jq -r --arg git_repo "$REPOSITORY" '.services[] | select (.parameters.repo_url==$git_repo) | .instance_id' /cd-config/toolchain.json)
+          if [ -z "$GIT_SERVICE_INSTANCE_ID" ]; then
+            echo "No Git integration (repository url: $REPOSITORY) found in the toolchain"
+            exit 1
+          fi
+          GIT_SERVICE_TYPE=$(jq -r --arg git_repo "$REPOSITORY" '.services[] | select (.parameters.repo_url==$git_repo) | .service_id' /cd-config/toolchain.json)
+          if [ "$GIT_SERVICE_TYPE" == "github" ]; then
+            GIT_AUTH_USER="x-oauth-basic"
+          elif [ "$GIT_SERVICE_TYPE" == "githubpublic" ]; then
+            GIT_AUTH_USER="x-oauth-basic"
+          elif [ "$GIT_SERVICE_TYPE" == "hostedgit" ]; then
+            GIT_AUTH_USER="oauth2"
+          elif [ "$GIT_SERVICE_TYPE" == "gitlab" ]; then
+            GIT_AUTH_USER="oauth2"
+          elif [ "$GIT_SERVICE_TYPE" == "bitbucketgit" ]; then
+            GIT_AUTH_USER="x-token-auth"
+          else
+            GIT_AUTH_USER="x-token-auth"
+          fi;
+          GIT_TOKEN="$(inputs.params.gitAccessToken)"
+          if [ -z "$GIT_TOKEN" ]; then
+            echo "Fetching token for $REPOSITORY"
+            ibmcloud config --check-version false
+            ibmcloud login -a $(inputs.params.ibmcloudApi) -r $TOOLCHAIN_REGION --apikey $API_KEY
+            if [ "$(inputs.params.resourceGroup)" ]; then
+              ibmcloud target -g $(inputs.params.resourceGroup)
+            fi
+            TOKEN=$(ibmcloud iam oauth-tokens --output JSON | jq -r '.iam_token')
+            GIT_TOKEN_URL=$(jq -r --arg git_repo "$REPOSITORY" '.services[] | select (.parameters.repo_url==$git_repo) | .parameters.token_url' /cd-config/toolchain.json)
+            echo "Doing cURL to ${GIT_TOKEN_URL}?toolchain_id=${TOOLCHAIN_ID}&service_instance_id=${GIT_SERVICE_INSTANCE_ID}&repo_url=${REPOSITORY}"
+            curl -s -o /steps/github_token_result.json -X GET -H "Accept: application/json" -H "Authorization: $TOKEN" "${GIT_TOKEN_URL}?toolchain_id=${TOOLCHAIN_ID}&service_instance_id=${GIT_SERVICE_INSTANCE_ID}&repo_url=${REPOSITORY}"
+            if jq -e '.access_token' /steps/github_token_result.json > /dev/null 2>&1; then
+              GIT_TOKEN=$(jq -r '.access_token' /steps/github_token_result.json)
+              echo "Access token found for the Git integration (repository url: $REPOSITORY)"
+            else
+              echo "No access token found for the Git integration (repository url: $REPOSITORY)"
+              cat /steps/github_token_result.json
+              exit 1
+            fi
+          else
+            echo "Using git Access Token provided"
+          fi
+          echo "GIT_REPOSITORY=$REPOSITORY" > /steps/next-step-env.properties
+          echo "GIT_AUTH_USER=$GIT_AUTH_USER" >> /steps/next-step-env.properties
+          echo "GIT_TOKEN=$GIT_TOKEN" >> /steps/next-step-env.properties
     - name: clone-repo
       image: alpine/git
       env:
