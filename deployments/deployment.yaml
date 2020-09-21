@@ -28,7 +28,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: zero-to-cloud-native-secrets
-              key: SERVERNAME
+              key: API_SERVERNAME
         - name: IAM_ENDPOINT
           valueFrom:
             secretKeyRef:
