@@ -1,39 +1,108 @@
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: build-task
-spec:
-  params:
-    - name: repository
-      description: the git repo
-    - name: revision
-      description: the revision
-      default: master
-    - name: apikey
-      description: the ibmcloud api key
-    - name: api
-      description: the ibmcloud api endpoint
-      default: "https://cloud.ibm.com"
-    - name: registryNamespace
-      description: the ibmcloud registry namespace
-    - name: imageName
-      description: the base image name
-      default: "web-frontend-02cn"
-    - name: registryRegion
-      description: the ibmcloud registry region
-  workspaces:
-  - name: task-pvc
-    mountPath: /artifacts   
-  steps:
-    - name: fetch-git-token
-      image: ibmcom/pipeline-base-image
+---
+  apiVersion: tekton.dev/v1beta1
+  kind: Task
+  metadata:
+    name: git-clone-repo
+  spec:
+    params:
+      - name: ibmcloud-api
+        description: the ibmcloud api
+        default: https://cloud.ibm.com
+      - name: continuous-delivery-context-secret
+        description: name of the secret containing the continuous delivery pipeline context secrets
+        default: secure-properties
+      - name: ibmcloud-apikey-secret-key
+        description: field in the secret that contains the api key used to login to ibmcloud
+        default: apikey
+      - name: git-access-token
+        description: |
+          (optional) token to access the git repository. If this token is provided, there will not be an attempt
+          to use the git token obtained from the authorization flow when adding the git integration in the toolchain
+        default: ""
+      - name: resource-group
+        description: target resource group (name or id) for the ibmcloud login operation
+        default: ""
+      - name: repository
+        description: the git repo url
+      - name: branch
+        description: the git branch
+        default: master
+      - name: revision
+        description: |
+          the git revision/commit to update the git HEAD to.
+          Default is to mean only use the branch
+        default: ""
+      - name: git-max-retry
+        description: max retry for the git clone operation
+        default: "1"
+      - name: pr-repository
+        description: |
+          the originating repository where the PullRequest comes from (in case of a fork)
+          default to '' means same repository (not a fork) or it can be the same as the repository to clone
+        default: ""
+      - name: pr-branch
+        description: |
+          the branch that is the source of this PullRequest
+        default: ""
+      - name: pr-revision
+        description: the commit/revision in the source branch of the PullRequest that is to be built
+        default: ""
+      - name: directory-name
+        description: |
+          name of the new directory to clone into.
+          Default to . in order to clone at the root of the workspace
+          It will be set to the "humanish" part of the repository if this param is set to blank
+        default: "."
+      - name: properties-file
+        description: file containing properties out of clone task (can be a filepath name relative to the workspace)
+        default: build.properties
+      - name: git-credentials-json-file
+        description: |
+          JSON file containing the git credentials as found out of the clone task
+          (can be a file path relative to the workspace).
+          Default to '' meaning no output of this information
+        default: ""
+      - name: pipeline-debug
+        description: Pipeline debug mode
+        default: "0"
+    results:
+      - name: git-repository
+        description: The cloned repository
+      - name: git-branch
+        description: The active branch for the repository
+      - name: git-commit
+        description: The current commit id that was cloned
+      - name: git-user
+        description: The auth user that cloned the repository
+    workspaces:
+      - name: output
+        description: The git repo will be cloned onto the volume backing this workspace
+        mountPath: /artifacts
+    stepTemplate:
       env:
-        - name: REPOSITORY
-          value: $(params.repository)
-      command: ["/bin/bash", "-c"]
-      args:
-        - |
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: $(params.continuous-delivery-context-secret)
+              key: $(params.ibmcloud-apikey-secret-key)
+              optional: true
+        - name: PIPELINE_DEBUG
+          value: $(params.pipeline-debug)
+    steps:
+      - name: fetch-git-token
+        image: ibmcom/pipeline-base-image:2.6
+        env:
+          - name: REPOSITORY
+            value: $(params.repository)
+        script: |
+          #!/bin/bash
           set -e -o pipefail
+          if [ $PIPELINE_DEBUG == 1 ]; then
+              pwd
+              env
+              trap env EXIT
+              set -x
+          fi
           TOOLCHAIN_ID=$(jq -r '.toolchain_guid' /cd-config/toolchain.json)
           TOOLCHAIN_REGION=$(jq -r '.region_id' /cd-config/toolchain.json | awk -F: '{print $3}')
           ##########################################################################
@@ -46,12 +115,14 @@ spec:
             echo "Adding .git suffix to Repository URL"
             REPOSITORY="${REPOSITORY}.git"
           fi
-          GIT_SERVICE_INSTANCE_ID=$(jq -r --arg git_repo "$REPOSITORY" '.services[] | select (.parameters.repo_url==$git_repo) | .instance_id' /cd-config/toolchain.json)
+          GIT_SERVICE_INSTANCE_ID=$(jq -r --arg git_repo "$REPOSITORY" \
+            '.services[] | select (.parameters.repo_url==$git_repo) | .instance_id' /cd-config/toolchain.json)
           if [ -z "$GIT_SERVICE_INSTANCE_ID" ]; then
             echo "No Git integration (repository url: $REPOSITORY) found in the toolchain"
             exit 1
           fi
-          GIT_SERVICE_TYPE=$(jq -r --arg git_repo "$REPOSITORY" '.services[] | select (.parameters.repo_url==$git_repo) | .service_id' /cd-config/toolchain.json)
+          GIT_SERVICE_TYPE=$(jq -r --arg git_repo "$REPOSITORY" \
+            '.services[] | select (.parameters.repo_url==$git_repo) | .service_id' /cd-config/toolchain.json)
           if [ "$GIT_SERVICE_TYPE" == "github" ]; then
             GIT_AUTH_USER="x-oauth-basic"
           elif [ "$GIT_SERVICE_TYPE" == "githubpublic" ]; then
@@ -98,215 +169,203 @@ spec:
           echo "GIT_REPOSITORY=$REPOSITORY" > /steps/next-step-env.properties
           echo "GIT_AUTH_USER=$GIT_AUTH_USER" >> /steps/next-step-env.properties
           echo "GIT_TOKEN=$GIT_TOKEN" >> /steps/next-step-env.properties
-    - name: clone-repo
-      image: alpine/git
-      env:
-        - name: REPOSITORY
-          value: $(params.repository)
-        - name: REVISION
-          value: $(params.revision)
-      command: ["/bin/sh", "-c"]
-      args:
-        - set -e -o pipefail;
-          echo "Cloning $REPOSITORY";
-          cd /workspace && git clone -q -b $REVISION $REPOSITORY .;
-    - name: pre-build-check
-      image: ibmcom/pipeline-base-image
-      env:
-        - name: IBMCLOUD_API_KEY
-          value: $(params.apikey)
-        - name: API
-          value: $(params.api)
-        - name: REGION
-          value: $(params.registryRegion)
-        - name: HOME
-          value: "/root"
-        - name: REGISTRY_NAMESPACE
-          value: $(params.registryNamespace)
-        - name: IMAGE_NAME
-          value: $(params.imageName)
-      command: ["/bin/bash", "-c"]
-      args:
-        - set -e -o pipefail;
-          ibmcloud login -a $API -r $REGION;
-          export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";
-          cd /workspace && source pre-build-check.sh;
-    - name: build-docker-image
-      image: ibmcom/pipeline-base-image
-      env:
-        - name: IBMCLOUD_API_KEY
-          value: $(params.apikey)
-        - name: API
-          value: $(params.api)
-        - name: REGION
-          value: $(params.registryRegion)
-        - name: HOME
-          value: "/root"
-        - name: REGISTRY_NAMESPACE
-          value: $(params.registryNamespace)
-        - name: IMAGE_NAME
-          value: $(params.imageName)
-        - name: ARCHIVE_DIR
-          value: "/artifacts"
-        - name: BUILD_NUMBER
-          value: "0"
-        - name: GIT_BRANCH
-          value: $(params.revision)
-      command: ["/bin/bash", "-c"]
-      args:
-        - set -e -o pipefail;
-          ibmcloud login -a $API -r $REGION;
-          export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";
-          export GIT_COMMIT=$(git rev-parse HEAD);
-          export REGISTRY_URL=$(ibmcloud cr info | sed "2q;d" | awk '{for(i=1;i<=NF;i++) if ($i=="Registry") print $(i+1)}');
-          cd /workspace && source build-docker-image.sh;
----
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: validate-task
-spec:
-  params:
-    - name: repository
-      description: the git repo
-    - name: revision
-      description: the revision
-      default: master
-    - name: apikey
-      description: the ibmcloud api key
-    - name: api
-      description: the ibmcloud api endpoint
-      default: "https://cloud.ibm.com"
-    - name: registryRegion
-      description: the ibmcloud registry region   
-  workspaces:
-  - name: task-pvc
-    mountPath: /artifacts         
-  steps:
-    - name: clone-repo
-      image: alpine/git
-      env:
-        - name: REPOSITORY
-          value: $(params.repository)
-        - name: REVISION
-          value: $(params.revision)
-      command: ["/bin/sh", "-c"]
-      args:
-        - set -e -o pipefail;
-          echo "Cloning $REPOSITORY";
-          cd /workspace && git clone -q -b $REVISION $REPOSITORY .;
-    - name: check-vulnerabilities
-      image: ibmcom/pipeline-base-image
-      env:
-        - name: IBMCLOUD_API_KEY
-          value: $(params.apikey)
-        - name: API
-          value: $(params.api)
-        - name: HOME
-          value: "/root"
-        - name: REGION
-          value: $(params.registryRegion)
-      command: ["/bin/bash", "-c"]
-      args:
-        - set -e -o pipefail;
-          ibmcloud login -a $API -r $REGION;
-          while read line; do export $line; done < /artifacts/build.properties;
-          cp /artifacts/build.properties .;
-          cd /workspace && source check-vulnerabilities.sh || true;
----
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: deploy-task
-spec:
-  params:
-    - name: repository
-      description: the git repo
-    - name: revision
-      description: the revision
-      default: master
-    - name: apikey
-      description: the ibmcloud api key
-    - name: api
-      description: the ibmcloud api endpoint
-      default: "https://cloud.ibm.com"
-    - name: deployment-file
-      default: deployment.yml
-    - name: clusterNamespace
-      default: prod
-    - name: cluster
-      description: The IBM Cloud Kubernetes cluster name
-    - name: clusterRegion
-      description: The IBM Cloud Kubernetes cluster region
-  workspaces:
-  - name: task-pvc
-    mountPath: /artifacts  
-  steps:
-    - name: clone-repo
-      image: alpine/git
-      env:
-        - name: REPOSITORY
-          value: $(params.repository)
-        - name: REVISION
-          value: $(params.revision)
-      command: ["/bin/sh", "-c"]
-      args:
-        - set -e -o pipefail;
-          echo "Cloning $REPOSITORY";
-          cd /workspace && git clone -q -b $REVISION $REPOSITORY .;
-    - name: pre-deploy-check
-      image: ibmcom/pipeline-base-image
-      env:
-        - name: IBMCLOUD_API_KEY
-          value: $(params.apikey)
-        - name: API
-          value: $(params.api)
-        - name: REGION
-          value: $(params.clusterRegion)
-        - name: HOME
-          value: "/root"
-        - name: DEPLOYMENT_FILE
-          value: $(params.deployment-file)
-        - name: CLUSTER_NAMESPACE
-          value: $(params.clusterNamespace)
-        - name: PIPELINE_KUBERNETES_CLUSTER_NAME
-          value: $(params.cluster)
-      command: ["/bin/bash", "-c"]
-      args:
-        - set -e -o pipefail;
-          ibmcloud login -a $API -r $REGION;
-          cd /workspace;
-          export IKS_BETA_VERSION=1;
-          ibmcloud ks cluster config -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}";
-          if which oc > /dev/null && ibmcloud ks cluster get -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}" --json | jq -e '.type=="openshift"' > /dev/null; then oc login -u apikey -p "${IBMCLOUD_API_KEY}" ; fi;
-          while read line; do export $line; done < /artifacts/build.properties;
-          cp /artifacts/build.properties .;
-          cd /workspace && source pre-deploy-check.sh;
-    - name: deploy-to-kubernetes
-      image: ibmcom/pipeline-base-image
-      env:
-        - name: IBMCLOUD_API_KEY
-          value: $(params.apikey)
-        - name: API
-          value: $(params.api)
-        - name: REGION
-          value: $(params.clusterRegion)
-        - name: HOME
-          value: "/root"
-        - name: DEPLOYMENT_FILE
-          value: $(params.deployment-file)
-        - name: CLUSTER_NAMESPACE
-          value: $(params.clusterNamespace)
-        - name: PIPELINE_KUBERNETES_CLUSTER_NAME
-          value: $(params.cluster)
-      command: ["/bin/bash", "-c"]
-      args:
-        - set -e -o pipefail;
-          ibmcloud login -a $API -r $REGION;
-          export IKS_BETA_VERSION=1;
-          ibmcloud ks cluster config -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}";
-          if which oc > /dev/null && ibmcloud ks cluster get -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}" --json | jq -e '.type=="openshift"' > /dev/null; then oc login -u apikey -p "${IBMCLOUD_API_KEY}" ; fi;
-          while read line; do export $line; done < /artifacts/build.properties;
-          cp /artifacts/build.properties .;
-          cd /workspace && source deploy-to-kubernetes.sh;
-      
+        volumeMounts:
+          - mountPath: /cd-config
+            name: cd-config-volume
+          - mountPath: /steps
+            name: steps-volume
+      - name: clone-repo
+        image: alpine/git
+        env:
+          - name: REPOSITORY
+            value: $(params.repository)
+          - name: BRANCH
+            value: $(params.branch)
+          - name: REVISION
+            value: $(params.revision)
+          - name: PR_REPOSITORY
+            value: $(params.pr-repository)
+          - name: PR_BRANCH
+            value: $(params.pr-branch)
+          - name: PR_REVISION
+            value: $(params.pr-revision)
+          - name: DIRECTORY_NAME
+            value: $(params.directory-name)
+          - name: PROPERTIES_FILE
+            value: $(params.properties-file)
+          - name: JSON_FILE_GIT_CREDENTIALS
+            value: $(params.git-credentials-json-file)
+        script: |
+          #!/bin/sh
+          set -e
+          if [ $PIPELINE_DEBUG == 1 ]; then
+              pwd
+              env
+              trap env EXIT
+              set -x
+          fi
+          ############################
+          # Workaround until a null/empty param can be flowing to Task
+          # REVISION if not set is define with a single blank value
+          BRANCH=$(echo $BRANCH)
+          REVISION=$(echo $REVISION)
+          PR_REPOSITORY=$(echo $PR_REPOSITORY)
+          PR_BRANCH=$(echo $PR_BRANCH)
+          PR_REVISION=$(echo $PR_REVISION)
+          ############################
+          source /steps/next-step-env.properties
+          # If $BRANCH is a full git ref then only keep the name part
+          BRANCH=$(echo ${BRANCH#"refs/heads/"})
+          echo "Cloning $REPOSITORY"
+          # Add the proper creds to the git repository
+          GIT_URL=$(echo "$REPOSITORY" | sed -e "s/:\/\//:\/\/$GIT_AUTH_USER:$GIT_TOKEN@/g")
+          ARTIFACTS_PATH="$(workspaces.output.path)"
+          cd $ARTIFACTS_PATH
+          if [ "$REVISION" ]; then
+            # check if the branch exists (that may not be the case in case of a pipeline-run re-run)
+            echo "Fetching specific -${REVISION}- commit"
+            if [ -z "$BRANCH" ]; then
+              # No branch provided
+              _clone_command='git clone -q -n $GIT_URL $DIRECTORY_NAME'
+            elif git ls-remote --heads --exit-code $GIT_URL $BRANCH > /dev/null 2>&1; then
+              _clone_command='git clone -q -b "$BRANCH" $GIT_URL $DIRECTORY_NAME'
+            else
+              echo "branch $BRANCH does not exists in $REPOSITORY"
+              _clone_command='git clone -q -n $GIT_URL $DIRECTORY_NAME'
+            fi
+          else
+            if [ -z "$BRANCH" ]; then
+              # No branch provided
+              echo "No branch or revision provided."
+              _clone_command='git clone -q -n $GIT_URL $DIRECTORY_NAME'
+            else
+              _clone_command='git clone -q -b "$BRANCH" $GIT_URL $DIRECTORY_NAME'
+            fi
+          fi
+          _max_retry=$(params.git-max-retry)
+          set +e
+          eval "$_clone_command"
+          _clone_code=$?
+          _retry_counter=1
+          while [ $_retry_counter -le $_max_retry ]; do
+              if [ $_clone_code != 0 ]; then
+                echo "Clone was not successful. Code $_clone_code - Retrying shortly..."
+                sleep 10
+                if [ $_retry_counter -eq $_max_retry ]; then
+                    set -e # reset on the last attempt so we fail if all attemps fail
+                fi
+                eval "$_clone_command"
+                let "_retry_counter++"
+              else
+                break
+              fi
+          done
+          echo "Repository $REPOSITORY successfully cloned"
+          set -e
+          current_dir=$(pwd)
+          if [ -z "$DIRECTORY_NAME" ]; then
+            # Find the "humanish" part of the git source repository that corresponds to the clone directory
+            # GIT_REPOSITORY contains the repository url with .git suffix
+            DIRECTORY_NAME=$(basename "${GIT_REPOSITORY##*/}" .git)
+          fi
+          cd $DIRECTORY_NAME
+          if [ "$REVISION" ]; then
+            # Point the HEAD to the specific revision
+            git checkout -q $REVISION
+          fi
+          GIT_COMMIT=$(git show-ref --head | head -n1 | awk '{print $1}')
+          # If a Pull Request/Merge Request branch is specified, then
+          # execute the git commands to have the cloned git repository directory content
+          # to be the result of the merge for pull request/merge request
+          if [ "${PR_BRANCH}" ]; then
+            echo "Performing Pull Request Checkout & Merge"
+            git config --global user.email "cdtektonpipeline@ibm.com"
+            git config --global user.name "CD Tekton Pipeline"
+            # Clear GIT_COMMIT as the outcome if this task is a non yet known commit
+            GIT_COMMIT=""
+            if [ -z "$PR_REPOSITORY" ] || [ "$PR_REPOSITORY" == "$REPOSITORY" ]; then
+              # Assuming the PR is not coming from a fork as $PR_REPOSITORY is empty or equals to $REPOSITORY
+              # Make the manual steps that a merge request action is doing
+              git fetch -q origin "${PR_BRANCH}"
+              if [ "${PR_REVISION}" ]; then
+                if git merge "${PR_REVISION}"; then
+                  echo "git merge ${PR_REVISION} done"
+                else
+                  exit 1
+                fi
+              else
+                if git merge "origin/${PR_BRANCH}"; then
+                  echo "git merge origin/${PR_BRANCH} done"
+                else
+                  exit 1
+                fi
+              fi
+              echo -n "git merge of $GIT_REPOSITORY (pr-branch ${PR_BRANCH} - pr_commit ${PR_REVISION}) to "
+              echo "(branch $BRANCH - commit $REVISION) done in directory $DIRECTORY_NAME"
+            else
+              # Assuming the PR is from a fork
+              # Expect that the same creds will be sufficient for the git pull from the forked repository
+              GIT_PR_REPO_URL=$(echo "$PR_REPOSITORY" | sed -e "s/:\/\//:\/\/$GIT_AUTH_USER:$GIT_TOKEN@/g")
+              # Make the manual steps that a merge request action is doing
+              # Step 1
+              if git pull "${GIT_PR_REPO_URL}" "${PR_BRANCH}"; then
+                echo "git pull ${PR_REPOSITORY} ${PR_BRANCH} done"
+              else
+                exit 1
+              fi
+              if [ "$PR_REVISION" ]; then
+                git checkout -q "$PR_REVISION"
+              fi
+              # create a specific branch to hold the PR state
+              git checkout -q -b cd-tekton-pipeline-temp-branch-for-pr
+              # Step 2
+              git checkout -q "${BRANCH}"
+              if git merge cd-tekton-pipeline-temp-branch-for-pr; then
+                echo -n "git merge of $PR_REPOSITORY (pr-branch ${PR_BRANCH} - pr_commit ${PR_REVISION}) to $REPOSITORY"
+                echo " (branch $BRANCH - commit $REVISION) done in directory $DIRECTORY_NAME"
+              else
+                exit 1
+              fi
+            fi
+          else
+            echo "git clone of $GIT_REPOSITORY (branch $BRANCH - commit $GIT_COMMIT) done in directory $DIRECTORY_NAME"
+          fi
+          cd $current_dir
+          if [ "$PROPERTIES_FILE" ]; then
+            # Ensure directory is there
+            mkdir -p $ARTIFACTS_PATH/$(dirname "$PROPERTIES_FILE")
+            echo "GIT_URL=$REPOSITORY" >> $ARTIFACTS_PATH/$PROPERTIES_FILE
+            echo "GIT_BRANCH=$BRANCH" >> $ARTIFACTS_PATH/$PROPERTIES_FILE
+            echo "GIT_COMMIT=$GIT_COMMIT" >> $ARTIFACTS_PATH/$PROPERTIES_FILE
+            # Change  write access permission to allow subsequent task(s) to update if needed
+            chmod go+rw $ARTIFACTS_PATH/$PROPERTIES_FILE
+            echo "$PROPERTIES_FILE content:"
+            cat $ARTIFACTS_PATH/$PROPERTIES_FILE
+          fi
+          if [ "$JSON_FILE_GIT_CREDENTIALS" ]; then
+            # Ensure directory is there
+            mkdir -p $ARTIFACTS_PATH/$(dirname "$JSON_FILE_GIT_CREDENTIALS")
+            # Create a JSON file as output of this step to store the git credentials for future use
+            echo "{" > "${ARTIFACTS_PATH}/${JSON_FILE_GIT_CREDENTIALS}"
+            echo "\"GIT_REPOSITORY\":\"${REPOSITORY}\"," >> "${ARTIFACTS_PATH}/${JSON_FILE_GIT_CREDENTIALS}"
+            echo "\"GIT_AUTH_USER\":\"${GIT_AUTH_USER}\"," >> "${ARTIFACTS_PATH}/${JSON_FILE_GIT_CREDENTIALS}"
+            echo "\"GIT_TOKEN\":\"${GIT_TOKEN}\"" >> "${ARTIFACTS_PATH}/${JSON_FILE_GIT_CREDENTIALS}"
+            echo "}" >> "${ARTIFACTS_PATH}/${JSON_FILE_GIT_CREDENTIALS}"
+          fi
+          # Record task results
+          echo -n "${REPOSITORY}" > $(results.git-repository.path)
+          echo -n "${BRANCH}" > $(results.git-branch.path)
+          echo -n "${GIT_COMMIT}" > $(results.git-commit.path)
+          echo -n "${GIT_AUTH_USER}" > $(results.git-user.path)
+        volumeMounts:
+          - mountPath: /steps
+            name: steps-volume
+    volumes:
+      - name: steps-volume
+        emptyDir: {}
+      - name: cd-config-volume
+        configMap:
+          name: toolchain
+          items:
+            - key: toolchain.json
+              path: toolchain.json
