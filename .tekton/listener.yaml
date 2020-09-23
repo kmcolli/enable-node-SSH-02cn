@@ -70,8 +70,6 @@ metadata:
   name: binding
 spec:
   params:
-    - name: repository
-      value: $(params.repository)
     - name: revision
       value: $(params.revision)
 ---
