@@ -14,6 +14,8 @@ spec:
       description: the ibmcloud registry namespace
     - name: cluster
       description: The IBM Cloud Kubernetes cluster name
+    - name: deploymentFile
+      description: location and name of the deployment file
     - name: registryRegion
       description: the ibmcloud registry region
       default: us-south
@@ -23,6 +25,8 @@ spec:
     - name: clusterNamespace
       description: The Kubernetes cluster namespace
       default: prod
+    - name: imageName
+      description: The name of the image with the container registy namespace
   workspaces:
   - name: pipeline-pvc
   tasks:
@@ -40,6 +44,8 @@ spec:
           value: $(params.registryNamespace)
         - name: registryRegion
           value: $(params.registryRegion)
+        - name: imageName
+          value: $(params.imageName)
       workspaces:
       - name: task-pvc
         workspace: pipeline-pvc          
@@ -74,6 +80,8 @@ spec:
           value: $(params.cluster)
         - name: clusterRegion
           value: $(params.clusterRegion)
+        - name: deploymentFile
+          value: $(params.deploymentFile)
         - name: clusterNamespace
           value: $(params.clusterNamespace)
       workspaces:

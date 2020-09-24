@@ -18,7 +18,6 @@ spec:
       description: the ibmcloud registry namespace
     - name: imageName
       description: the base image name
-      default: "enable-node-ssh-02cn"
     - name: registryRegion
       description: the ibmcloud registry region
   workspaces:
@@ -57,7 +56,7 @@ spec:
         - set -e -o pipefail;
           ibmcloud login -a $API -r $REGION;
           export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";
-          cd /workspace && source pre-build-check.sh;
+          cd /workspace && source .tekton/pre-build-check.sh;
     - name: build-docker-image
       image: ibmcom/pipeline-base-image
       env:
@@ -86,7 +85,7 @@ spec:
           export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";
           export GIT_COMMIT=$(git rev-parse HEAD);
           export REGISTRY_URL=$(ibmcloud cr info | sed "2q;d" | awk '{for(i=1;i<=NF;i++) if ($i=="Registry") print $(i+1)}');
-          cd /workspace && source build-docker-image.sh;
+          cd /workspace && source .tekton/build-docker-image.sh;
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Task
@@ -139,7 +138,7 @@ spec:
           ibmcloud login -a $API -r $REGION;
           while read line; do export $line; done < /artifacts/build.properties;
           cp /artifacts/build.properties .;
-          cd /workspace && source check-vulnerabilities.sh || true;
+          cd /workspace && source .tekton/check-vulnerabilities.sh || true;
 ---
 apiVersion: tekton.dev/v1beta1
 kind: Task
@@ -154,11 +153,11 @@ spec:
       default: master
     - name: apikey
       description: the ibmcloud api key
+    - name: deploymentFile
+      description: name and location of the deployment file
     - name: api
       description: the ibmcloud api endpoint
       default: "https://cloud.ibm.com"
-    - name: deployment-file
-      default: deployment.yml
     - name: clusterNamespace
       default: prod
     - name: cluster
@@ -193,7 +192,7 @@ spec:
         - name: HOME
           value: "/root"
         - name: DEPLOYMENT_FILE
-          value: $(params.deployment-file)
+          value: $(params.deploymentFile)
         - name: CLUSTER_NAMESPACE
           value: $(params.clusterNamespace)
         - name: PIPELINE_KUBERNETES_CLUSTER_NAME
@@ -208,7 +207,7 @@ spec:
           if which oc > /dev/null && ibmcloud ks cluster get -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}" --json | jq -e '.type=="openshift"' > /dev/null; then oc login -u apikey -p "${IBMCLOUD_API_KEY}" ; fi;
           while read line; do export $line; done < /artifacts/build.properties;
           cp /artifacts/build.properties .;
-          cd /workspace && source pre-deploy-check.sh;
+          cd /workspace && source .tekton/pre-deploy-check.sh;
     - name: deploy-to-kubernetes
       image: ibmcom/pipeline-base-image
       env:
@@ -221,7 +220,7 @@ spec:
         - name: HOME
           value: "/root"
         - name: DEPLOYMENT_FILE
-          value: $(params.deployment-file)
+          value: $(params.deploymentFile)
         - name: CLUSTER_NAMESPACE
           value: $(params.clusterNamespace)
         - name: PIPELINE_KUBERNETES_CLUSTER_NAME
@@ -235,5 +234,5 @@ spec:
           if which oc > /dev/null && ibmcloud ks cluster get -c "${PIPELINE_KUBERNETES_CLUSTER_NAME}" --json | jq -e '.type=="openshift"' > /dev/null; then oc login -u apikey -p "${IBMCLOUD_API_KEY}" ; fi;
           while read line; do export $line; done < /artifacts/build.properties;
           cp /artifacts/build.properties .;
-          cd /workspace && source deploy-to-kubernetes.sh;
+          cd /workspace && source .tekton/deploy-to-kubernetes.sh;
       
