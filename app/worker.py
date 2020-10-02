@@ -63,12 +63,8 @@ def enableSSHNode(reqid, apikey, cluster_name):
         app.logger.debug("{} resource group id = {}".format(reqid, resourceGroupId))
         
         worker_details = check_output(['ibmcloud', 'ks', 'workers', '--cluster', cluster_name, '--json'])
-        app.logger.debug("after worker")
-        # worker_details_str = worker_details.decode('utf8').replace("'",'"')
         worker_details_str = worker_details.decode('utf8')
-        app.logger.debug("after utf")
         worker_details_dict = json.loads(worker_details_str)
-        app.logger.debug("after worker")
         app.logger.debug("{} Here are the workers {}".format(reqid, worker_details_dict))
         # create and attach block to each worker node
         for worker in worker_details_dict:
